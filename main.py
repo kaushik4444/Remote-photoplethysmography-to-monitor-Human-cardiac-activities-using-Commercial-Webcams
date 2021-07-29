@@ -98,6 +98,7 @@ with mp_face_mesh.FaceMesh(min_detection_confidence=0.5,min_tracking_confidence=
           frame_count += 1
           f_plot.append(frame_count)
 
+
           mp_drawing.draw_landmarks(
             image=image,
             landmark_list=face_landmarks,

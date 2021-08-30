@@ -14,17 +14,18 @@ import pickle
 from xlsxwriter import Workbook
 import scipy.signal as sig
 import heartpy as hp
+import pandas as pd
 
 plt.ion()  # Set interactive mode on
 fig = plt.figure()
-plt.xlabel("Frames")
+plt.xlabel("Time(ms)")
 plt.ylabel("Pixels")
 
 mp_drawing = mp.solutions.drawing_utils
 mp_face_mesh = mp.solutions.face_mesh
 
 # Excel parameters
-fr = []
+time_stamp = []
 blue = []
 red = []
 green = []
@@ -33,7 +34,7 @@ green = []
 b_plot = []
 g_plot = []
 r_plot = []
-f_plot = []
+t_plot = []
 
 # Using Video-capture to get the fps value.
 capture = cv2.VideoCapture(0)
@@ -47,8 +48,10 @@ vs = VideoStream().start()
 # Using Video-capture to run video file
 # cap = cv2.VideoCapture("WIN_20210712_16_25_07_Pro.mp4")
 # cap = cv2.VideoCapture('WIN_20210809_16_24_34_Pro.mp4')
+# cap = cv2.VideoCapture('01-base.mp4')
 
 frame_count = 0  # frames count
+time_count = 0  # time in milliseconds
 update = 0  # plot update
 
 is_update = False
@@ -144,7 +147,8 @@ with mp_face_mesh.FaceMesh(min_detection_confidence=0.5, min_tracking_confidence
                 g_plot.append(roi_pixel_img[:, 1].mean())
                 r_plot.append(roi_pixel_img[:, 2].mean())
                 frame_count += 1
-                f_plot.append(frame_count)
+                time_count += (1000/fps)
+                t_plot.append(time_count)
 
                 # Draw the face mesh on the image
                 mp_drawing.draw_landmarks(
@@ -156,14 +160,14 @@ with mp_face_mesh.FaceMesh(min_detection_confidence=0.5, min_tracking_confidence
                 cv2.imshow('MediaPipe FaceMesh', image)
                 cv2.imshow('MediaPipe Masked pixel crop', crop_img)
 
-                # Plot the graph 3 times a sec (10 new records each time)
-                if frame_count % int(fps / 3) == 0:
+                # Plot the graph 2 times a sec (15 new records each time)
+                if frame_count % 15 == 0:
                     is_update = True  # New frame has come
 
                     # plot the RGB signals
-                    plt.plot(f_plot, b_plot, 'b', label='Blue')
-                    plt.plot(f_plot, g_plot, 'g', label='Green')
-                    plt.plot(f_plot, r_plot, 'r', label='Red')
+                    plt.plot(t_plot, b_plot, 'b', label='Blue')
+                    plt.plot(t_plot, g_plot, 'g', label='Green')
+                    plt.plot(t_plot, r_plot, 'r', label='Red')
                     plt.pause(0.01)
                     # Save the plot as png file
                     fig.savefig('rPPGplotLive.png', dpi=100)
@@ -176,17 +180,17 @@ with mp_face_mesh.FaceMesh(min_detection_confidence=0.5, min_tracking_confidence
                             blue.extend(b_plot)
                             green.extend(g_plot)
                             red.extend(r_plot)
-                            fr.extend(f_plot)
+                            time_stamp.extend(t_plot)
                         else:
-                            blue.extend(b_plot[(len(b_plot) - int(fps / 3)):(len(b_plot) - 1)])
-                            green.extend(g_plot[(len(g_plot) - int(fps / 3)):(len(g_plot) - 1)])
-                            red.extend(r_plot[(len(r_plot) - int(fps / 3)):(len(r_plot) - 1)])
-                            fr.extend(f_plot[(len(f_plot) - int(fps / 3)):(len(f_plot) - 1)])
+                            blue.extend(b_plot[(len(b_plot) - 15):len(b_plot)])
+                            green.extend(g_plot[(len(g_plot) - 15):len(g_plot)])
+                            red.extend(r_plot[(len(r_plot) - 15):len(r_plot)])
+                            time_stamp.extend(t_plot[(len(t_plot) - 15):len(t_plot)])
 
-                        del b_plot[0:int(fps / 3)]
-                        del g_plot[0:int(fps / 3)]
-                        del r_plot[0:int(fps / 3)]
-                        del f_plot[0:int(fps / 3)]
+                        del b_plot[0:15]
+                        del g_plot[0:15]
+                        del r_plot[0:15]
+                        del t_plot[0:15]
 
                         is_update = False  # we added the new frame to our list structure
 
@@ -205,20 +209,21 @@ with mp_face_mesh.FaceMesh(min_detection_confidence=0.5, min_tracking_confidence
     bp_r_plot = bandpass(red, fps, 2, 0.5, 3)  # Heart Rate : 60-100 bpm (1-1.7 Hz)
     bp_g_plot = bandpass(green, fps, 2, 0.5, 2)  # Heart Rate : 60-100 bpm (1-1.7 Hz)
     bp_b_plot = bandpass(blue, fps, 2, 0.5, 2)  # Heart Rate : 60-100 bpm (1-1.7 Hz)
-    plt.plot(fr, bp_r_plot, 'r', label='BPFiltered_Red')
-    # plt.plot(fr, bp_g_plot, 'g', label='BPFiltered_Green')
-    # plt.plot(fr, bp_b_plot, 'b', label='BPFiltered_Blue')
+    plt.plot(time_stamp, bp_r_plot, 'r', label='BPFiltered_Red')
+    # plt.plot(time_stamp, bp_g_plot, 'g', label='BPFiltered_Green')
+    # plt.plot(time_stamp, bp_b_plot, 'b', label='BPFiltered_Blue')
     # plt.legend()
     plt.show()
 
     # Calculate Heart Rate and Plot
-    working_data, measures = hp.process(bp_r_plot, 30.0)
-    hp.plotter(working_data, measures)
+    working_data, measures = hp.process(bp_r_plot, fps)
+    plot_object = hp.plotter(working_data, measures, show=False)
+    plot_object.savefig('bpmPlotLive.png', dpi=100)
     plt.show()
 
     # Export to pickle byte stream object
-    tabular_rgb = np.array([np.array(fr), np.array(red), np.array(green), np.array(blue)])
-    pickle.dump(tabular_rgb, open("save.p", "wb"))
+    tabular_rgb = np.array([np.array(time_stamp), np.array(red), np.array(green), np.array(blue)])
+    pickle.dump(tabular_rgb, open("live_save.p", "wb"))
     # _pickle_imported_obj = pickle.load(open("save.p", "rb"))
 
     # Export to Excel file
@@ -227,13 +232,13 @@ with mp_face_mesh.FaceMesh(min_detection_confidence=0.5, min_tracking_confidence
     row = 0
     col = 0
 
-    sheet.write(row, col, 'Frames')
+    sheet.write(row, col, 'Time')
     sheet.write(row + 1, col, 'Blue mean')
     sheet.write(row + 2, col, 'Green mean')
     sheet.write(row + 3, col, 'Red mean')
     col += 1
 
-    for f, b, g, r in zip(fr, blue, green, red):
+    for f, b, g, r in zip(time_stamp, blue, green, red):
         sheet.write(row, col, f)
         sheet.write(row + 1, col, b)
         sheet.write(row + 2, col, g)

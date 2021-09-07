@@ -36,6 +36,10 @@ g_plot = []
 r_plot = []
 t_plot = []
 
+# Set source_mp4 Video
+# source_mp4 = '01-base.mp4'
+# source_csv = '01-base PPG.csv'
+
 # Using Video-capture to get the fps value.
 capture = cv2.VideoCapture(0)
 fps = capture.get(cv2.CAP_PROP_FPS)
@@ -46,9 +50,7 @@ print(fps)
 vs = VideoStream().start()
 
 # Using Video-capture to run video file
-# cap = cv2.VideoCapture("WIN_20210712_16_25_07_Pro.mp4")
-# cap = cv2.VideoCapture('WIN_20210809_16_24_34_Pro.mp4')
-# cap = cv2.VideoCapture('01-base.mp4')
+# cap = cv2.VideoCapture(source_mp4)
 
 frame_count = 0  # frames count
 time_count = 0  # time in milliseconds
@@ -76,6 +78,17 @@ def bandpass(signal, fs, order, fc_low, fc_hig, debug=False):
     bp_b, bp_a = sig.butter(order, (cut_low, cut_hig), btype="bandpass")  # Design and apply the band-pass filter.
     bp_data = list(sig.filtfilt(bp_b, bp_a, signal))  # Apply forward-backward filter with linear phase.
     return bp_data
+
+# Fast Fourier Transform
+def fft(data, fs, scale="mag"):
+   # Apply Hanning window function to the data.
+   data_win = data * np.hanning(len(data))
+   if scale == "mag":  # Select magnitude scale.
+     mag = 2.0 * np.abs(np.fft.rfft(tuple(data_win)) / len(data_win))  # Single-sided DFT -> FFT
+   elif scale == "pwr":  # Select power scale.
+     mag = np.abs(np.fft.rfft(tuple(data_win)))**2  # Spectral power
+   bin = np.fft.rfftfreq(len(data_win), d=1.0/fs)  # Calculate bins, single-sided
+   return bin, mag
 
 
 # For webcam input:
@@ -129,12 +142,12 @@ with mp_face_mesh.FaceMesh(min_detection_confidence=0.5, min_tracking_confidence
 
                 # Draw ROI's on the image
                 cv2.polylines(image, [forehead], True, (0, 255, 255), 2)
-                cv2.polylines(image, [left_cheek1], True, (0, 255, 255), 2)
-                cv2.polylines(image, [right_cheek1], True, (0, 255, 255), 2)
+                cv2.polylines(image, [left_cheek], True, (0, 255, 255), 2)
+                cv2.polylines(image, [right_cheek], True, (0, 255, 255), 2)
 
                 # mask the image and crop the ROI with black background
                 mask = np.zeros((height, width), dtype=np.uint8)
-                cv2.fillPoly(mask, [forehead, left_cheek1, right_cheek1], (255))
+                cv2.fillPoly(mask, [forehead, left_cheek, right_cheek], (255))
                 crop_img = cv2.bitwise_and(image, image, mask=mask)
 
                 # eliminate the black pixels and get mean of RGB for each frame
@@ -158,7 +171,7 @@ with mp_face_mesh.FaceMesh(min_detection_confidence=0.5, min_tracking_confidence
                     landmark_drawing_spec=drawing_spec,
                     connection_drawing_spec=drawing_spec)
                 cv2.imshow('MediaPipe FaceMesh', image)
-                cv2.imshow('MediaPipe Masked pixel crop', crop_img)
+                # cv2.imshow('MediaPipe Masked pixel crop', crop_img)
 
                 # Plot the graph 2 times a sec (15 new records each time)
                 if frame_count % 15 == 0:
@@ -206,19 +219,34 @@ with mp_face_mesh.FaceMesh(min_detection_confidence=0.5, min_tracking_confidence
     # Hold plot and plot the filtered signals
     plt.ioff()
     # 2nd order butterworth bandpass filtering
-    bp_r_plot = bandpass(red, fps, 2, 0.5, 3)  # Heart Rate : 60-100 bpm (1-1.7 Hz)
+    bp_r_plot = bandpass(red, fps, 2, 0.5, 2.5)  # Heart Rate : 60-100 bpm (1-1.7 Hz), taking 30-150 (0.5 - 2.5)
     bp_g_plot = bandpass(green, fps, 2, 0.5, 2)  # Heart Rate : 60-100 bpm (1-1.7 Hz)
     bp_b_plot = bandpass(blue, fps, 2, 0.5, 2)  # Heart Rate : 60-100 bpm (1-1.7 Hz)
     plt.plot(time_stamp, bp_r_plot, 'r', label='BPFiltered_Red')
+    plt.title("Raw and Filtered Signals")
     # plt.plot(time_stamp, bp_g_plot, 'g', label='BPFiltered_Green')
     # plt.plot(time_stamp, bp_b_plot, 'b', label='BPFiltered_Blue')
     # plt.legend()
-    plt.show()
+    # plt.show()
+
+    # Calculate and display FFT
+    X_fft, Y_fft = fft(bp_r_plot, fps, scale="mag")
+    fig2 = plt.figure(2)
+    plt.plot(X_fft, Y_fft)
+    plt.title("FFT of filtered Signal")
+    fig2.savefig('FFTplotLive.png', dpi=100)
+    # plt.show()
 
     # Calculate Heart Rate and Plot
     working_data, measures = hp.process(bp_r_plot, fps)
-    plot_object = hp.plotter(working_data, measures, show=False)
+    plot_object = hp.plotter(working_data, measures, show=False, title= 'Final_Heart Rate Signal Peak Detection')
     plot_object.savefig('bpmPlotLive.png', dpi=100)
+
+    # hrdata = hp.get_data(source_csv, column_name='Signal')
+    # timerdata = hp.get_data(source_csv, column_name='Time')
+    # working_data1, measures1 = hp.process(hrdata, hp.get_samplerate_mstimer(timerdata))
+    # plot_object1 = hp.plotter(working_data1, measures1, show=False, title= 'Original_Heart Rate Signal Peak Detection')
+    # plot_object1.savefig('bpmPlotOriginal.png', dpi=100)
     plt.show()
 
     # Export to pickle byte stream object

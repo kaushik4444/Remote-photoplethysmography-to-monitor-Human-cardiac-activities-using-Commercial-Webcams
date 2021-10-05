@@ -15,6 +15,7 @@ from xlsxwriter import Workbook
 import scipy.signal as sig
 import heartpy as hp
 import pandas as pd
+from scipy import signal
 
 plt.ion()  # Set interactive mode on
 fig = plt.figure()
@@ -220,25 +221,35 @@ with mp_face_mesh.FaceMesh(min_detection_confidence=0.5, min_tracking_confidence
     plt.ioff()
     # 2nd order butterworth bandpass filtering
     bp_r_plot = bandpass(red, fps, 2, 0.5, 2.5)  # Heart Rate : 60-100 bpm (1-1.7 Hz), taking 30-150 (0.5 - 2.5)
-    bp_g_plot = bandpass(green, fps, 2, 0.5, 2)  # Heart Rate : 60-100 bpm (1-1.7 Hz)
-    bp_b_plot = bandpass(blue, fps, 2, 0.5, 2)  # Heart Rate : 60-100 bpm (1-1.7 Hz)
-    plt.plot(time_stamp, bp_r_plot, 'r', label='BPFiltered_Red')
-    plt.title("Raw and Filtered Signals")
-    # plt.plot(time_stamp, bp_g_plot, 'g', label='BPFiltered_Green')
+    bp_g_plot = bandpass(green, fps, 2, 0.5, 2.5)  # Heart Rate : 60-100 bpm (1-1.7 Hz)
+    bp_b_plot = bandpass(blue, fps, 2, 0.5, 2.5)  # Heart Rate : 60-100 bpm (1-1.7 Hz)
+    # plt.plot(time_stamp, bp_r_plot, 'r', label='BPFiltered_Red')
+    plt.plot(time_stamp, bp_g_plot, 'g', label='BPFiltered_Green')
     # plt.plot(time_stamp, bp_b_plot, 'b', label='BPFiltered_Blue')
+    plt.title("Raw and Filtered Signals")
     # plt.legend()
     # plt.show()
 
     # Calculate and display FFT
-    X_fft, Y_fft = fft(bp_r_plot, fps, scale="mag")
+    X_fft, Y_fft = fft(bp_g_plot, fps, scale="mag")
     fig2 = plt.figure(2)
     plt.plot(X_fft, Y_fft)
     plt.title("FFT of filtered Signal")
     fig2.savefig('FFTplotLive.png', dpi=100)
     # plt.show()
 
+    # Welch's Periodogram
+    f_set, Pxx_den = signal.welch(bp_a_plot, fps)
+    fig3 = plt.figure(3)
+    plt.semilogy(f_set, Pxx_den)
+    plt.ylim([0.5e-3, 1])
+    plt.xlabel('frequency [Hz]')
+    plt.ylabel('PSD [V**2/Hz]')
+    fig3.savefig('WelchplotVideo.png', dpi=100)
+    # plt.show()
+
     # Calculate Heart Rate and Plot
-    working_data, measures = hp.process(bp_r_plot, fps)
+    working_data, measures = hp.process(bp_g_plot, fps)
     plot_object = hp.plotter(working_data, measures, show=False, title= 'Final_Heart Rate Signal Peak Detection')
     plot_object.savefig('bpmPlotLive.png', dpi=100)
 

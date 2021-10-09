@@ -14,7 +14,6 @@ import pickle
 from xlsxwriter import Workbook
 import scipy.signal as sig
 import heartpy as hp
-import pandas as pd
 from scipy import signal
 
 
@@ -39,8 +38,8 @@ b_plot = []
 t_plot = []
 
 # Set source_mp4 Video
-source_mp4 = '01-base.mp4'
-source_csv = '01-base PPG.csv'
+source_mp4 = '02-base.mp4'
+source_csv = '02-base PPG.csv'
 
 # Using Video-capture to get the fps value.
 capture = cv2.VideoCapture(source_mp4)
@@ -274,15 +273,15 @@ with mp_face_mesh.FaceMesh(min_detection_confidence=0.5, min_tracking_confidence
     col = 0
 
     sheet.write(row, col, 'Time')
-    sheet.write(row + 1, col, 'luminance mean')
-    sheet.write(row + 2, col, 'a_star mean')
-    sheet.write(row + 3, col, 'b_star mean')
-    col += 1
+    sheet.write(row, col + 1, 'luminance mean')
+    sheet.write(row, col + 2, 'a_star mean')
+    sheet.write(row, col + 3, 'b_star mean')
+    row += 1
 
     for f, b, g, r in zip(time_stamp, luminance, a_star, b_star):
         sheet.write(row, col, f)
-        sheet.write(row + 1, col, b)
-        sheet.write(row + 2, col, g)
-        sheet.write(row + 3, col, r)
-        col += 1
+        sheet.write(row, col + 1, b)
+        sheet.write(row, col + 2, g)
+        sheet.write(row, col + 3, r)
+        row += 1
     book.close()

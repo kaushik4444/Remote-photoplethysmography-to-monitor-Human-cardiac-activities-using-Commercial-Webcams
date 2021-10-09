@@ -11,11 +11,13 @@ import matplotlib.pyplot as plt
 import mediapipe as mp
 from imutils.video import VideoStream
 import pickle
-from xlsxwriter import Workbook
-import scipy.signal as sig
 import heartpy as hp
 import pandas as pd
+import scipy.signal as sig
+from xlsxwriter import Workbook
 from scipy import signal
+from sklearn.metrics import accuracy_score
+from sklearn.metrics import precision_recall_fscore_support
 
 plt.ion()  # Set interactive mode on
 fig = plt.figure(1)
@@ -37,15 +39,16 @@ g_plot = []
 r_plot = []
 t_plot = []
 
-# Set source_mp4 Video
+# Get source_mp4 Video, Ground truth values
 source_mp4 = '01-base.mp4'
-source_csv = '01-base PPG.csv'
+original_data = '01-base PPG.csv'
+df_original_HR = pd.read_csv(original_data, index_col=None)
 
 # Using Video-capture to get the fps value.
 capture = cv2.VideoCapture(source_mp4)
+# capture = cv2.VideoCapture(0)
 fps = capture.get(cv2.CAP_PROP_FPS)
 capture.release()
-print(fps)
 
 # Using Video-Stream to continuously run Webcam
 # vs = VideoStream().start()
@@ -80,16 +83,17 @@ def bandpass(signal, fs, order, fc_low, fc_hig, debug=False):
     bp_data = list(sig.filtfilt(bp_b, bp_a, signal))  # Apply forward-backward filter with linear phase.
     return bp_data
 
+
 # Fast Fourier Transform
 def fft(data, fs, scale="mag"):
-   # Apply Hanning window function to the data.
-   data_win = data * np.hanning(len(data))
-   if scale == "mag":  # Select magnitude scale.
-     mag = 2.0 * np.abs(np.fft.rfft(tuple(data_win)) / len(data_win))  # Single-sided DFT -> FFT
-   elif scale == "pwr":  # Select power scale.
-     mag = np.abs(np.fft.rfft(tuple(data_win)))**2  # Spectral power
-   bin = np.fft.rfftfreq(len(data_win), d=1.0/fs)  # Calculate bins, single-sided
-   return bin, mag
+    # Apply Hanning window function to the data.
+    data_win = data * np.hanning(len(data))
+    if scale == "mag":  # Select magnitude scale.
+        mag = 2.0 * np.abs(np.fft.rfft(tuple(data_win)) / len(data_win))  # Single-sided DFT -> FFT
+    elif scale == "pwr":  # Select power scale.
+        mag = np.abs(np.fft.rfft(tuple(data_win))) ** 2  # Spectral power
+    bin = np.fft.rfftfreq(len(data_win), d=1.0 / fs)  # Calculate bins, single-sided
+    return bin, mag
 
 
 # For webcam input:
@@ -149,6 +153,7 @@ with mp_face_mesh.FaceMesh(min_detection_confidence=0.5, min_tracking_confidence
                 # mask the image and crop the ROI with black background
                 mask = np.zeros((height, width), dtype=np.uint8)
                 # cv2.fillPoly(mask, [forehead, left_cheek, right_cheek], (255))
+                # cv2.fillPoly(mask, [left_cheek, right_cheek], (255))
                 cv2.fillPoly(mask, [forehead], (255))
                 crop_img = cv2.bitwise_and(image, image, mask=mask)
 
@@ -162,8 +167,8 @@ with mp_face_mesh.FaceMesh(min_detection_confidence=0.5, min_tracking_confidence
                 g_plot.append(roi_pixel_img[:, 1].mean())
                 r_plot.append(roi_pixel_img[:, 2].mean())
                 frame_count += 1
-                time_count += (1000/fps)
-                t_plot.append(time_count)
+                t_plot.append(round(time_count))
+                time_count += (1000 / fps)
 
                 # Draw the face mesh on the image
                 mp_drawing.draw_landmarks(
@@ -222,8 +227,8 @@ with mp_face_mesh.FaceMesh(min_detection_confidence=0.5, min_tracking_confidence
     plt.ioff()
     # 2nd order butterworth bandpass filtering
     bp_r_plot = bandpass(red, fps, 2, 0.5, 2.5)  # Heart Rate : 60-100 bpm (1-1.7 Hz), taking 30-150 (0.5 - 2.5)
-    bp_g_plot = bandpass(green, fps, 2, 0.5, 2.5)  # Heart Rate : 60-100 bpm (1-1.7 Hz)
-    bp_b_plot = bandpass(blue, fps, 2, 0.5, 2.5)  # Heart Rate : 60-100 bpm (1-1.7 Hz)
+    bp_g_plot = bandpass(green, fps, 2, 0.5, 2.5)  # Heart Rate : 60-100 bpm (1-1.7 Hz), taking 30-150 (0.5 - 2.5)
+    bp_b_plot = bandpass(blue, fps, 2, 0.5, 2.5)  # Heart Rate : 60-100 bpm (1-1.7 Hz), taking 30-150 (0.5 - 2.5)
     # plt.plot(time_stamp, bp_r_plot, 'r', label='BPFiltered_Red')
     plt.plot(time_stamp, bp_g_plot, 'g', label='BPFiltered_Green')
     # plt.plot(time_stamp, bp_b_plot, 'b', label='BPFiltered_Blue')
@@ -246,20 +251,70 @@ with mp_face_mesh.FaceMesh(min_detection_confidence=0.5, min_tracking_confidence
     plt.ylim([0.5e-3, 1])
     plt.xlabel('frequency [Hz]')
     plt.ylabel('PSD [V**2/Hz]')
+    plt.title("Welchplot")
     fig3.savefig('WelchplotVideo.png', dpi=100)
     # plt.show()
 
     # Calculate Heart Rate and Plot
     working_data, measures = hp.process(bp_g_plot, fps)
-    plot_object = hp.plotter(working_data, measures, show=False, title= 'Final_Heart Rate Signal Peak Detection')
+    plot_object = hp.plotter(working_data, measures, show=False, title='Final_Heart Rate Signal Peak Detection')
     plot_object.savefig('bpmPlotVideo.png', dpi=100)
+    peaks = [0] * len(working_data['hr'])
+    for p, q in zip(working_data['peaklist'], working_data['binary_peaklist']):
+        if q == 1:
+            peaks[p] = 1
 
-    hrdata = hp.get_data(source_csv, column_name='Signal')
-    timerdata = hp.get_data(source_csv, column_name='Time')
+    # Calculate and display original FFT
+    X_fft, Y_fft = fft(df_original_HR['Signal'], fps, scale="mag")
+    fig4 = plt.figure(4)
+    plt.plot(X_fft, Y_fft)
+    plt.title("FFT of Original Signal")
+    fig4.savefig('Original_FFTplotVideo.png', dpi=100)
+    # plt.show()
+
+    # Original Welch's Periodogram
+    f_set, Pxx_den = signal.welch(df_original_HR['Signal'], fps)
+    fig5 = plt.figure(5)
+    plt.semilogy(f_set, Pxx_den)
+    plt.ylim([0.5e-3, 1])
+    plt.xlabel('frequency [Hz]')
+    plt.ylabel('PSD [V**2/Hz]')
+    plt.title("Original_Welchplot")
+    fig5.savefig('Original_WelchplotVideo.png', dpi=100)
+    # plt.show()
+
+    # Calculate Original Heart Rate and Plot
+    hrdata = hp.get_data(original_data, column_name='Signal')
+    timerdata = hp.get_data(original_data, column_name='Time')
     working_data1, measures1 = hp.process(hrdata, hp.get_samplerate_mstimer(timerdata))
-    plot_object1 = hp.plotter(working_data1, measures1, show=False, title= 'Original_Heart Rate Signal Peak Detection')
+    plot_object1 = hp.plotter(working_data1, measures1, show=False, title='Original_Heart Rate Signal Peak Detection')
     plot_object1.savefig('bpmPlotOriginal.png', dpi=100)
     plt.show()
+
+    # calculate Evaluation metrics
+    Accuracy = accuracy_score(df_original_HR['Peaks'][0:len(peaks)], peaks)
+    Metrics = precision_recall_fscore_support(df_original_HR['Peaks'][0:len(peaks)], peaks)
+    Precision, Recall, f1_score = Metrics[0][0], Metrics[1][0], Metrics[2][0]
+
+    print('Accuracy:', Accuracy, 'Precision:', Precision, 'Recall:', Recall, 'f1_score:', f1_score)
+
+    # Export Heart rate to Excel file
+    book = Workbook('Heartrate_video.xlsx')
+    sheet = book.add_worksheet()
+    row = 0
+    col = 0
+
+    sheet.write(row, col, 'Time')
+    sheet.write(row, col + 1, 'Signal')
+    sheet.write(row, col + 2, 'Peaks')
+    row += 1
+
+    for f, b, g in zip(time_stamp, working_data['hr'], peaks):
+        sheet.write(row, col, f)
+        sheet.write(row, col + 1, b)
+        sheet.write(row, col + 2, g)
+        row += 1
+    book.close()
 
     # Export to pickle byte stream object
     tabular_rgb = np.array([np.array(time_stamp), np.array(red), np.array(green), np.array(blue)])
@@ -273,15 +328,15 @@ with mp_face_mesh.FaceMesh(min_detection_confidence=0.5, min_tracking_confidence
     col = 0
 
     sheet.write(row, col, 'Time')
-    sheet.write(row + 1, col, 'Blue mean')
-    sheet.write(row + 2, col, 'Green mean')
-    sheet.write(row + 3, col, 'Red mean')
-    col += 1
+    sheet.write(row, col + 1, 'Blue mean')
+    sheet.write(row, col + 2, 'Green mean')
+    sheet.write(row, col + 3, 'Red mean')
+    row += 1
 
     for f, b, g, r in zip(time_stamp, blue, green, red):
         sheet.write(row, col, f)
-        sheet.write(row + 1, col, b)
-        sheet.write(row + 2, col, g)
-        sheet.write(row + 3, col, r)
-        col += 1
+        sheet.write(row, col + 1, b)
+        sheet.write(row, col + 2, g)
+        sheet.write(row, col + 3, r)
+        row += 1
     book.close()

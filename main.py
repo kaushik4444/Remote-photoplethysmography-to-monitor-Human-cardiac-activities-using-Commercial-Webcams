@@ -3,64 +3,21 @@
 # University of Siegen, Germany
 
 # Remote Photoplethysmography
-# Version 1.0 (August 2021)
+# Version 1.0 (August 2021) - For Videos with Known Ground Truth Values
 
 import cv2
 import numpy as np
 import matplotlib.pyplot as plt
 import mediapipe as mp
 from imutils.video import VideoStream
-import pickle
 import heartpy as hp
 import pandas as pd
+from scipy import signal
 import scipy.signal as sig
 from xlsxwriter import Workbook
-from scipy import signal
 from sklearn.metrics import accuracy_score
 from sklearn.metrics import precision_recall_fscore_support
-
-plt.ion()  # Set interactive mode on
-fig = plt.figure()
-plt.xlabel("Time(ms)")
-plt.ylabel("Pixels")
-
-mp_drawing = mp.solutions.drawing_utils
-mp_face_mesh = mp.solutions.face_mesh
-
-# Excel parameters
-time_stamp = []
-blue = []
-red = []
-green = []
-
-# plotting parameters
-b_plot = []
-g_plot = []
-r_plot = []
-t_plot = []
-
-# Get source_mp4 Video, Ground truth values
-# source_mp4 = '01-base.mp4'
-# original_data = '01-base PPG.csv'
-# df_original_HR = pd.read_csv(original_data, index_col=None)
-
-# Using Video-capture to get the fps value.
-# capture = cv2.VideoCapture(source_mp4)
-capture = cv2.VideoCapture(0)
-fps = capture.get(cv2.CAP_PROP_FPS)
-capture.release()
-
-# Using Video-Stream to continuously run Webcam
-vs = VideoStream().start()
-
-# Using Video-capture to run video file
-# cap = cv2.VideoCapture(source_mp4)
-
-frame_count = 0  # frames count
-time_count = 0  # time in milliseconds
-update = 0  # plot update
-
-is_update = False
+from scipy.signal import correlate
 
 
 # Butterworth forward-backward band-pass filter
@@ -96,16 +53,60 @@ def fft(data, fs, scale="mag"):
     return bin, mag
 
 
+plt.ion()  # Set interactive mode on
+fig = plt.figure(1)
+plt.xlabel("Time(ms)")
+plt.ylabel("Pixels")
+plt.title("Raw RGB signals")
+
+mp_drawing = mp.solutions.drawing_utils
+mp_face_mesh = mp.solutions.face_mesh
+
+# Excel parameters
+time_stamp = []
+blue = []
+red = []
+green = []
+
+# plotting parameters
+b_plot = []
+g_plot = []
+r_plot = []
+t_plot = []
+
+# Get source_mp4 Video, Ground truth values
+source_mp4 = '05-base.mp4'
+original_data = '05-base PPG.csv'
+df_original_HR = pd.read_csv(original_data, index_col=None)
+
+# Using Video-capture to get the fps value.
+capture = cv2.VideoCapture(source_mp4)
+# capture = cv2.VideoCapture(0)
+fps = capture.get(cv2.CAP_PROP_FPS)
+capture.release()
+
+# Using Video-Stream to continuously run Webcam
+# vs = VideoStream().start()
+
+# Using Video-capture to run video file
+cap = cv2.VideoCapture(source_mp4)
+
+frame_count = 0  # frames count
+time_count = 0  # time in milliseconds
+update = 0  # plot update
+plot = False  # True to show POS plots
+is_update = False
+
 # For webcam input:
 drawing_spec = mp_drawing.DrawingSpec(thickness=1, circle_radius=1)
 with mp_face_mesh.FaceMesh(min_detection_confidence=0.5, min_tracking_confidence=0.5) as face_mesh:
     while True:
-        image = vs.read()
-        # success, image = cap.read()
+        # image = vs.read()
+        success, image = cap.read()
         if image is None:
             # If loading a video, use 'break' instead of 'continue'.
-            continue
-            # break
+            # continue
+            break
         height, width, _ = image.shape
         # Flip the image horizontally for a later selfie-view display, and convert the BGR image to RGB.
         image = cv2.cvtColor(cv2.flip(image, 1), cv2.COLOR_BGR2RGB)
@@ -152,9 +153,9 @@ with mp_face_mesh.FaceMesh(min_detection_confidence=0.5, min_tracking_confidence
 
                 # mask the image and crop the ROI with black background
                 mask = np.zeros((height, width), dtype=np.uint8)
-                # cv2.fillPoly(mask, [forehead, left_cheek, right_cheek], (255))
+                cv2.fillPoly(mask, [forehead, left_cheek, right_cheek], (255))
                 # cv2.fillPoly(mask, [left_cheek, right_cheek], (255))
-                cv2.fillPoly(mask, [forehead], (255))
+                # cv2.fillPoly(mask, [forehead], (255))
                 crop_img = cv2.bitwise_and(image, image, mask=mask)
 
                 # eliminate the black pixels and get mean of RGB for each frame
@@ -180,7 +181,7 @@ with mp_face_mesh.FaceMesh(min_detection_confidence=0.5, min_tracking_confidence
                 cv2.imshow('MediaPipe FaceMesh', image)
                 # cv2.imshow('MediaPipe Masked pixel crop', crop_img)
 
-                # Plot the graph 2 times a sec (15 new records each time)
+                # Plot the graph 4 times a sec (15 new records each time)
                 if frame_count % 15 == 0:
                     is_update = True  # New frame has come
 
@@ -189,8 +190,6 @@ with mp_face_mesh.FaceMesh(min_detection_confidence=0.5, min_tracking_confidence
                     plt.plot(t_plot, g_plot, 'g', label='Green')
                     plt.plot(t_plot, r_plot, 'r', label='Red')
                     plt.pause(0.01)
-                    # Save the plot as png file
-                    fig.savefig('rPPGplotLive.png', dpi=100)
                     update += 1
 
                 elif update > 2:
@@ -219,87 +218,217 @@ with mp_face_mesh.FaceMesh(min_detection_confidence=0.5, min_tracking_confidence
             break
 
     cv2.destroyAllWindows()
-    # cap.release()
+    cap.release()
     capture.release()
-    vs.stop()
+    # vs.stop()
 
-    # Hold plot and plot the filtered signals
+    # Hold plot and save raw RGB signals
     plt.ioff()
+    fig.savefig('test/rPPG_RGB.png', dpi=100)
+
+    # stack r, g, b channels into a single 2-D array
+    mean_rgb = np.vstack((red, green, blue)).T
+
+    # Calculating window length l and initiate bvp as 0's
+    l = int(fps * 1.6)
+    H = np.zeros(mean_rgb.shape[0])
+
+    # POS Algorithm to extract bvp from raw signal
+    for t in range(0, (mean_rgb.shape[0] - l)):
+        # Step 1: Spatial averaging
+        C = mean_rgb[t:t + l - 1, :].T
+        # C = mean_rgb.T
+        # print("t={0},t+l={1}".format(t, t + l))
+        if t == 3:
+            plot = False
+
+        if plot:
+            f = np.arange(0, C.shape[1])
+            plt.plot(f, C[0, :], 'r', f, C[1, :], 'g', f, C[2, :], 'b')
+            plt.title("Mean RGB - Sliding Window")
+            plt.show()
+
+        # Step 2 : Temporal normalization
+        mean_color = np.mean(C, axis=1)
+        diag_mean_color = np.diag(mean_color)
+        diag_mean_color_inv = np.linalg.inv(diag_mean_color)
+        Cn = np.matmul(diag_mean_color_inv, C)
+        # Cn = diag_mean_color_inv@C
+        # print("Temporal normalization", Cn)
+
+        if plot:
+            f = np.arange(0, Cn.shape[1])
+            # plt.ylim(0,100000)
+            plt.plot(f, Cn[0, :], 'r', f, Cn[1, :], 'g', f, Cn[2, :], 'b')
+            plt.title("Temporal normalization - Sliding Window")
+            plt.show()
+
+        # Step 3: projection_matrix
+        projection_matrix = np.array([[0, 1, -1], [-2, 1, 1]])
+        S = np.matmul(projection_matrix, Cn)
+        # S = projection_matrix@Cn
+        # print("S matrix", S)
+        if plot:
+            f = np.arange(0, S.shape[1])
+            # plt.ylim(0,100000)
+            plt.plot(f, S[0, :], 'c', f, S[1, :], 'm')
+            plt.title("Projection matrix")
+            plt.show()
+
+        # Step 4: 2D signal to 1D signal
+        std = np.array([1, np.std(S[0, :]) / np.std(S[1, :])])
+        # print("std", std)
+        P = np.matmul(std, S)
+        # P = std@S
+        # print("P", P)
+        if plot:
+            f = np.arange(0, len(P))
+            plt.plot(f, P, 'k')
+            plt.title("Alpha tuning")
+            plt.show()
+
+        # Step 5: Overlap-Adding
+        H[t:t + l - 1] = H[t:t + l - 1] + (P - np.mean(P)) / np.std(P)
+
+    # print("Pulse", H)
+    bvp_signal = H
+    # print("Raw signal shape", len(green))
+    # print("Extracted Pulse shape", H.shape)
+
     # 2nd order butterworth bandpass filtering
-    bp_r_plot = bandpass(red, fps, 2, 0.5, 2.5)  # Heart Rate : 60-100 bpm (1-1.7 Hz), taking 30-150 (0.5 - 2.5)
-    bp_g_plot = bandpass(green, fps, 2, 0.5, 2.5)  # Heart Rate : 60-100 bpm (1-1.7 Hz), taking 30-150 (0.5 - 2.5)
-    bp_b_plot = bandpass(blue, fps, 2, 0.5, 2.5)  # Heart Rate : 60-100 bpm (1-1.7 Hz), taking 30-150 (0.5 - 2.5)
-    # plt.plot(time_stamp, bp_r_plot, 'r', label='BPFiltered_Red')
-    plt.plot(time_stamp, bp_g_plot, 'g', label='BPFiltered_Green')
-    # plt.plot(time_stamp, bp_b_plot, 'b', label='BPFiltered_Blue')
-    plt.title("Raw and Filtered Signals")
-    # plt.legend()
-    # plt.show()
-
-    # Calculate and display FFT
-    X_fft, Y_fft = fft(bp_g_plot, fps, scale="mag")
+    filtered_pulse = bandpass(bvp_signal, fps, 2, 0.9,
+                              1.8)  # Heart Rate : 60-100 bpm (1-1.7 Hz), taking 54-108 (0.9 - 1.8)
     fig2 = plt.figure(2)
-    plt.plot(X_fft, Y_fft)
-    plt.title("FFT of filtered Signal")
-    fig2.savefig('FFTplotLive.png', dpi=100)
+    plt.plot(time_stamp, bvp_signal, 'g', label='Extracted_pulse')
+    plt.plot(time_stamp, filtered_pulse, 'r', label='Filtered_pulse')
+    plt.title("Raw and Filtered Signals")
+    plt.xlabel('Time [ms]')
+    # Save the plot as png file
+    fig2.savefig('test/rPPG_pulse.png', dpi=100)
     # plt.show()
 
-    # Welch's Periodogram
-    f_set, Pxx_den = signal.welch(bp_g_plot, fps)
+    # plot welch's periodogram
+    bvp_signal = bvp_signal.flatten()
+    f_set, f_psd = signal.welch(bvp_signal, fps, window='hamming', nperseg=1024)  # , scaling='spectrum',nfft=2048)
     fig3 = plt.figure(3)
-    plt.semilogy(f_set, Pxx_den)
-    plt.ylim([0.5e-3, 1])
+    plt.semilogy(f_set, f_psd)
     plt.xlabel('frequency [Hz]')
     plt.ylabel('PSD [V**2/Hz]')
-    plt.title("Welchplot")
-    fig3.savefig('WelchplotLive.png', dpi=100)
+    plt.title("Welchplot of extracted pulse")
+    fig3.savefig('test/rPPG_extractedWelch.png', dpi=100)
     # plt.show()
 
-    # Calculate Heart Rate and Plot
-    working_data, measures = hp.process(bp_g_plot, fps)
+    # Filtering the welch's periodogram - Heart Rate : 60-100 bpm (1-1.7 Hz), taking 54-108 (0.9 - 1.8)
+    # green_psd = green_psd.flatten()
+    first = np.where(f_set > 0.9)[0]  # 0.8 for 300 frames
+    last = np.where(f_set < 1.8)[0]
+    first_index = first[0]
+    last_index = last[-1]
+    range_of_interest = range(first_index, last_index + 1, 1)
+
+    # get the frequency with highest psd
+    # print("Range of interest", range_of_interest)
+    max_idx = np.argmax(f_psd[range_of_interest])
+    f_max = f_set[range_of_interest[max_idx]]
+
+    # calculate Heart rate
+    hr = f_max * 60.0
+    print("Detected Heart rate using POS = {0}".format(hr))
+
+    # Calculate and display FFT of filtered pulse
+    X_fft, Y_fft = fft(filtered_pulse, fps, scale="mag")
+    fig4 = plt.figure(4)
+    plt.plot(X_fft, Y_fft)
+    plt.title("FFT of filtered Signal")
+    plt.xlabel('frequency [Hz]')
+    fig4.savefig('test/rPPG_filteredFFT.png', dpi=100)
+    # plt.show()
+
+    # Welch's Periodogram of filtered pulse
+    f_set, Pxx_den = signal.welch(filtered_pulse, fps, window='hamming', nperseg=1024)
+    fig5 = plt.figure(5)
+    plt.semilogy(f_set, Pxx_den)
+    plt.xlabel('frequency [Hz]')
+    plt.ylabel('PSD [V**2/Hz]')
+    plt.title("Welchplot of filtered pulse")
+    fig5.savefig('test/rPPG_filteredWelch.png', dpi=100)
+    # plt.show()
+
+    # Calculate Heart Rate and Plot using HeartPy Library
+    working_data, measures = hp.process(filtered_pulse, fps)
     plot_object = hp.plotter(working_data, measures, show=False, title='Final_Heart Rate Signal Peak Detection')
-    plot_object.savefig('bpmPlotLive.png', dpi=100)
+    plot_object.savefig('test/bpmPlotVideo.png', dpi=100)
     peaks = [0] * len(working_data['hr'])
     for p, q in zip(working_data['peaklist'], working_data['binary_peaklist']):
         if q == 1:
             peaks[p] = 1
+    detected_peaks_data = {i: peaks.count(i) for i in peaks}
+    print('Detected number of peaks =', detected_peaks_data[1])
+    print('Detected Heart rate using HeartPy =', measures['bpm'])
+    print('Detected Inter beat interval using HeartPy =', measures['ibi'])
+    print('Detected Breathing rate using HeartPy =', measures['breathingrate']*60)
+
+    # calculate Original Heart rate
+    avg_hr = 0
+    df_original_HR = df_original_HR[0:len(peaks)]
+    peaks_data = list(df_original_HR.loc[df_original_HR['Peaks'] == 1]['Time'])
+    print('Original number of peaks =', len(peaks_data))
+    for i in range(len(peaks_data) - 1):
+        diff = peaks_data[i + 1] - peaks_data[i]
+        insta_hr = fps * 1000 / diff
+        avg_hr = avg_hr + insta_hr
+    avg_hr = avg_hr / len(peaks_data) - 1
+    print('The Original Heart rate is', avg_hr)
 
     # Calculate and display original FFT
-    # X_fft, Y_fft = fft(df_original_HR['Signal'], fps, scale="mag")
-    # fig4 = plt.figure(4)
-    # plt.plot(X_fft, Y_fft)
-    # plt.title("FFT of Original Signal")
-    # fig4.savefig('Original_FFTplotLive.png', dpi=100)
+    X_fft, Y_fft = fft(df_original_HR['Signal'], fps, scale="mag")
+    fig7 = plt.figure(7)
+    plt.plot(X_fft, Y_fft)
+    plt.xlabel('frequency [Hz]')
+    plt.title("FFT of Original Signal")
+    fig7.savefig('test/Original_FFT.png', dpi=100)
     # plt.show()
 
     # Original Welch's Periodogram
-    # f_set, Pxx_den = signal.welch(df_original_HR['Signal'], fps)
-    # fig5 = plt.figure(5)
-    # plt.semilogy(f_set, Pxx_den)
-    # plt.ylim([0.5e-3, 1])
-    # plt.xlabel('frequency [Hz]')
-    # plt.ylabel('PSD [V**2/Hz]')
-    # plt.title("Original_Welchplot")
-    # fig5.savefig('Original_WelchplotLive.png', dpi=100)
+    f_set, Pxx_den = signal.welch(df_original_HR['Signal'], fps, window='hamming', nperseg=1024)
+    fig8 = plt.figure(8)
+    plt.semilogy(f_set, Pxx_den)
+    plt.ylim([0.5e-3, 1])
+    plt.xlabel('frequency [Hz]')
+    plt.ylabel('PSD [V**2/Hz]')
+    plt.title("Original_Welchplot")
+    fig8.savefig('test/Original_Welch.png', dpi=100)
     # plt.show()
 
-    # Calculate Original Heart Rate and Plot
-    # hrdata = hp.get_data(original_data, column_name='Signal')
-    # timerdata = hp.get_data(original_data, column_name='Time')
-    # working_data1, measures1 = hp.process(hrdata, hp.get_samplerate_mstimer(timerdata))
-    # plot_object1 = hp.plotter(working_data1, measures1, show=False, title='Original_Heart Rate Signal Peak Detection')
-    # plot_object1.savefig('bpmPlotOriginal.png', dpi=100)
+    # calculate Evaluation metrics and Signal Correlation to find time shift
+    A = df_original_HR['Peaks']
+    B = pd.DataFrame(peaks)[0]
+
+    Accuracy = accuracy_score(A, B)
+    Metrics = precision_recall_fscore_support(A, B, average='binary')
+    Precision, Recall, f1_score = Metrics[0], Metrics[1], Metrics[2]
+
+    # generate time series for correlation
+    rev_time = (0 - df_original_HR['Time']).iloc[:0:-1]
+    dt = (pd.concat([rev_time, df_original_HR['Time']])).to_numpy()
+
+    # regularize datasets by subtracting mean and dividing by s.d.
+    A -= A.mean()
+    A /= A.std()
+    B -= B.mean()
+    B /= B.std()
+
+    # Signal correlation
+    x_corr = correlate(A, B)
+    time_shift = dt[x_corr.argmax()]
+
+    print('Accuracy:', Accuracy, 'Precision:', Precision)
+    print('Recall:', Recall, 'f1_score:', f1_score)
+    print('Time shift:', time_shift / 1000, 'sec')
     plt.show()
 
-    # calculate Evaluation metrics
-    # Accuracy = accuracy_score(df_original_HR['Peaks'][0:len(peaks)], peaks)
-    # Metrics = precision_recall_fscore_support(df_original_HR['Peaks'][0:len(peaks)], peaks)
-    # Precision, Recall, f1_score = Metrics[0][0], Metrics[1][0], Metrics[2][0]
-
-    # print('Accuracy:', Accuracy, 'Precision:', Precision, 'Recall:', Recall, 'f1_score:', f1_score)
-
-    # Export Heart rate to Excel file
-    book = Workbook('Heartrate_live.xlsx')
+    # Export Heart rate (HeartPy) to Excel file
+    book = Workbook('test/Heartrate_signal.xlsx')
     sheet = book.add_worksheet()
     row = 0
     col = 0
@@ -316,13 +445,8 @@ with mp_face_mesh.FaceMesh(min_detection_confidence=0.5, min_tracking_confidence
         row += 1
     book.close()
 
-    # Export to pickle byte stream object
-    tabular_rgb = np.array([np.array(time_stamp), np.array(red), np.array(green), np.array(blue)])
-    pickle.dump(tabular_rgb, open("live_save.p", "wb"))
-    # _pickle_imported_obj = pickle.load(open("save.p", "rb"))
-
-    # Export to Excel file
-    book = Workbook('rPPGLive.xlsx')
+    # Export Raw RGB signals to Excel file
+    book = Workbook('test/RGB_signal.xlsx')
     sheet = book.add_worksheet()
     row = 0
     col = 0

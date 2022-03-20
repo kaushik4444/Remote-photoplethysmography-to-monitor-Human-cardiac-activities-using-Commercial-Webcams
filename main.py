@@ -296,8 +296,7 @@ with mp_face_mesh.FaceMesh(min_detection_confidence=0.5, min_tracking_confidence
     # print("Extracted Pulse shape", H.shape)
 
     # 2nd order butterworth bandpass filtering
-    filtered_pulse = bandpass(bvp_signal, fps, 2, 0.9,
-                              1.8)  # Heart Rate : 60-100 bpm (1-1.7 Hz), taking 54-108 (0.9 - 1.8)
+    filtered_pulse = bandpass(bvp_signal, fps, 2, 0.9, 1.8)  # Heart Rate : 60-100 bpm (1-1.7 Hz), taking 54-108 (0.9 - 1.8)
     fig2 = plt.figure(2)
     plt.plot(time_stamp, bvp_signal, 'g', label='Extracted_pulse')
     plt.plot(time_stamp, filtered_pulse, 'r', label='Filtered_pulse')
